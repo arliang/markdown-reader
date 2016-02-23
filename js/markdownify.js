@@ -3,7 +3,7 @@
     var interval, 
         defaultReloadFreq = 3,
         previousText,
-        storage = chrome.storage.local;
+        storage = localStorage;
 
     function parseMatchPattern(input) {
         if (typeof input !== 'string') {
@@ -45,13 +45,13 @@
     // Onload, take the DOM of the page, get the markdown formatted text out and
     // apply the converter.
     function makeHtml(data) {
-        storage.get('mathjax', function(items) {
-            if(items.mathjax) {
-                data = data.replace(/\\\(/g, "\\\\(");
-                data = data.replace(/\\\)/g, "\\\\)");
-                data = data.replace(/\\\[/g, "\\\\[");
-                data = data.replace(/\\\]/g, "\\\\]");
-            }
+        storage_get('mathjax').then(function(items) {
+            // if(items.mathjax) {
+            //     data = data.replace(/\\\(/g, "\\\\(");
+            //     data = data.replace(/\\\)/g, "\\\\)");
+            //     data = data.replace(/\\\[/g, "\\\\[");
+            //     data = data.replace(/\\\]/g, "\\\\]");
+            // }
 
             marked.setOptions({
                 highlight : function(code) {
@@ -61,21 +61,21 @@
             var html = marked(data);
             $(document.body).html(html);
 
-            if (items.mathjax) {
-                // Inject js to reload MathJax
-                var js = $('<script/>').attr('type', 'text/javascript')
-                    .attr('src', chrome.extension.getURL('js/runMathJax.js'));
-                $(document.head).append(js);
-            }
+            // if (items.mathjax) {
+            //     // Inject js to reload MathJax
+            //     var js = $('<script/>').attr('type', 'text/javascript')
+            //         .attr('src', 'js/runMathJax.js');
+            //     $(document.head).append(js);
+            // }
         });
     }
 
     function getThemeCss(theme) {
-        return chrome.extension.getURL('theme/' + theme + '.css');
+        return 'theme/' + theme + '.css';
     }
 
     function setTheme(theme) {
-        var defaultThemes = ['Clearness', 'ClearnessDark', 'Github', 'TopMarks'];
+        var defaultThemes = ['Clearness', 'ClearnessDark', 'Github', 'TopMarks', 'myTheme'];
 
         if($.inArray(theme, defaultThemes) != -1) {
             var link = $('#theme');
@@ -93,7 +93,7 @@
         } else {
             var themePrefix = 'theme_',
                 key = themePrefix + theme;
-            storage.get(key, function(items) {
+            storage_get(key).then(function(items) {
                 if(items[key]) {
                     $('#theme').remove();
                     var theme = $('#custom-theme');
@@ -126,7 +126,7 @@
         stopAutoReload();
 
         var freq = defaultReloadFreq;
-        storage.get('reload_freq', function(items) {
+        storage_get('reload_freq').then(function(items) {
             if(items.reload_freq) {
                 freq = items.reload_freq;
             }
@@ -147,37 +147,60 @@
         }, freq * 1000);
     }
 
-    function render() {
+    function render(url) {
         $.ajax({
-            url : location.href, 
+            url : url, 
             cache : false,
             complete : function(xhr, textStatus) {
-                var contentType = xhr.getResponseHeader('Content-Type');
+                var contentType = xhr.getResponseHeader('Content-Type'),
+                    content = xhr.responseText;
                 if(contentType && (contentType.indexOf('html') > -1)) {
                     return;    
                 }
 
-                makeHtml(document.body.innerText);
+                makeHtml(content);
                 var specialThemePrefix = 'special_',
                     pageKey = specialThemePrefix + location.href;
-                storage.get(['theme', pageKey], function(items) {
-                    theme = items.theme ? items.theme : 'Clearness';
+                storage_get(['theme', pageKey]).then(function(items) {
+                    theme = items.theme ? items.theme : 'myTheme';
                     if(items[pageKey]) {
                         theme = items[pageKey];
                     }
                     setTheme(theme);
                 });
 
-                storage.get('auto_reload', function(items) {
-                    if(items.auto_reload) {
-                        startAutoReload();
-                    }
-                });
+                // storage_get('auto_reload').then(function(items) {
+                //     if(items.auto_reload) {
+                //         startAutoReload();
+                //     }
+                // });
             }
         });
     }
+    
+    function storage_get(query){
+        return $.Deferred(function(defer){
+            var result;
+            if($.isArray(query)){
+                result = [];
+                $.each(query, function(){
+                    result.push(localStorage.getItem(this));
+                });
+            } else {
+                result = localStorage.getItem(query);
+            }
+            defer.resolve(result);
+        })
+    }
+    
+    storage_get(['exclude_exts', 'disable_markdown', 'mathjax']).then(function(items) {
+        var url;
+        if(location.hash){
+            url = location.hash.replace(/^#/, '');
+        } else {
+            url = 'README.md';   
+        }
 
-    storage.get(['exclude_exts', 'disable_markdown', 'mathjax'], function(items) {
         if(items.disable_markdown) {
             return;
         }
@@ -188,45 +211,17 @@
 
         var exts = items.exclude_exts;
         if(!exts) {
-            render();
+            render(url);
             return;
         }
 
         var parsed = $.map(exts, function(k, v) {
             return parseMatchPattern(v);
         });
+        
         var pattern = new RegExp(parsed.join('|'));
         if(!parsed.length || !pattern.test(location.href)) {
-            render();
-        }
-    });
-
-    chrome.storage.onChanged.addListener(function(changes, namespace) {
-        var specialThemePrefix = 'special_',
-            pageKey = specialThemePrefix + location.href;
-        for (key in changes) {
-            var value = changes[key];
-            if(key == pageKey) {
-                setTheme(value.newValue);
-            } else if(key == 'theme') {
-                storage.get(pageKey, function(items) {
-                    if(!items[pageKey]) {
-                        setTheme(value.newValue);
-                    }
-                });
-            } else if(key == 'reload_freq') {
-                storage.get('auto_reload', function(items) {
-                    startAutoReload();
-                });
-            } else if(key == 'auto_reload') {
-                if(value.newValue) {
-                    startAutoReload();
-                } else {
-                    stopAutoReload();
-                }
-            } else if(key == 'disable_markdown') {
-                location.reload();
-            }
+            render(url);
         }
     });
 
